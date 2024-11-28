@@ -1,13 +1,10 @@
 package com.example.shop_manager.Response;
 
-import com.example.shop_manager.Entity.Order;
-import com.example.shop_manager.Entity.Product;
+
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,7 +13,6 @@ public class OrderDataBase extends JPanel {
     private final String URL = "jdbc:mysql://localhost:3306/shop";
     private final String User = "root";
     private final String Password = "nguyenthithuha";
-
     private JTextField txtCustomerId, txtProductId, txtQuantity,txtOrderId;
     private JTable orderTable;
     private DefaultTableModel tableModel;
@@ -24,8 +20,8 @@ public class OrderDataBase extends JPanel {
     private HashMap<String, String> customerMap = new HashMap<>();
     private HashMap<String, Double> productMap = new HashMap<>();
     private HashMap<String, Integer> product_quantity = new HashMap<>();
-    private HashMap<String, Integer> order_id = new HashMap<>();
-    private int currentOrderId = 1; // To generate order ID
+
+
 
     public OrderDataBase() {
         setLayout(new BorderLayout());
@@ -98,64 +94,169 @@ public class OrderDataBase extends JPanel {
 
     private void addOrder() {
         try (Connection conn = DriverManager.getConnection(URL, User, Password)) {
+
+            String orderId = txtOrderId.getText().trim();
             String customerId = txtCustomerId.getText().trim();
             String productId = txtProductId.getText().trim();
             int quantity = Integer.parseInt(txtQuantity.getText().trim());
 
-
-            String customerName = customerMap.get(customerId);
-            if (customerName == null) {
-                String query = "SELECT name FROM Customer WHERE id = ?";
-                PreparedStatement stmt = conn.prepareStatement(query);
-                stmt.setString(1, customerId);
-                ResultSet rs = stmt.executeQuery();
-                if (rs.next()) {
-                    customerName = rs.getString("name");
-                    customerMap.put(customerId, customerName);
-                } else {
-                    JOptionPane.showMessageDialog(this, "Customer ID not found");
-                    return;
+            // Kiểm tra số lượng phải lớn hơn 0
+            if (quantity <= 0) {
+                JOptionPane.showMessageDialog(this, "Quantity must be greater than 0.");
+                return;
+            }
+            // Kiểm tra customer_id có tồn tại hay không
+            boolean isCustomerValid = false;
+            while (!isCustomerValid) {
+                String checkCustomer = "SELECT * FROM Customer WHERE id = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(checkCustomer)) {
+                    stmt.setString(1, customerId);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            isCustomerValid = true; // Tìm thấy Customer ID
+                        } else {
+                            JOptionPane.showMessageDialog(this, "Customer ID not found. Please try again.");
+                            customerId = JOptionPane.showInputDialog(this, "Enter Customer ID:");
+                            if (customerId == null || customerId.trim().isEmpty()) {
+                                JOptionPane.showMessageDialog(this, "Customer ID cannot be empty.");
+                            }
+                        }
+                    }
                 }
             }
 
-            // Retrieve product price
-            Double price = productMap.get(productId);
-            if (price == null) {
-                String query = "SELECT price FROM Product WHERE id = ?";
-                PreparedStatement stmt = conn.prepareStatement(query);
-                stmt.setString(1, productId);
-                ResultSet rs = stmt.executeQuery();
-                if (rs.next()) {
-                    price = rs.getDouble("price");
-                    productMap.put(productId, price);
-                } else {
-                    JOptionPane.showMessageDialog(this, "Product ID not found");
-                    return;
+            // Kiểm tra product_id có tồn tại hay không
+            boolean isProductValid = false;
+            while (!isProductValid) {
+                String checkProduct = "SELECT * FROM Product WHERE id = ?";
+                try (PreparedStatement stmt = conn.prepareStatement(checkProduct)) {
+                    stmt.setString(1, productId);
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        if (rs.next()) {
+                            isProductValid = true;
+                        } else {
+                            JOptionPane.showMessageDialog(this, "Product ID not found. Please try again.");
+                            productId = JOptionPane.showInputDialog(this, "Enter Product ID:");
+                            if (productId == null || productId.trim().isEmpty()) {
+                                JOptionPane.showMessageDialog(this, "Product ID cannot be empty.");
+                            }
+                        }
+                    }
+                }
+            }
+            // Kiểm tra xem Order ID có tồn tại không
+            String checkOrder = "SELECT id FROM `Order` WHERE id = ?";
+            try (PreparedStatement checkOrderStmt = conn.prepareStatement(checkOrder)) {
+                checkOrderStmt.setString(1, orderId);
+                try (ResultSet rs = checkOrderStmt.executeQuery()) {
+                    if (!rs.next()) {
+                        JOptionPane.showMessageDialog(this, "Order ID not found. Adding a new order.");
+
+                        // Nếu Order ID không tồn tại, thêm một Order mới
+                        String insertOrder = "INSERT INTO `Order` (id, totalPrice, status) VALUES (?, 0, '1')";
+                        try (PreparedStatement insertOrderStmt = conn.prepareStatement(insertOrder)) {
+                            insertOrderStmt.setString(1, orderId);
+                            insertOrderStmt.executeUpdate();
+                        }
+                    }
                 }
             }
 
-            double total = price * quantity;
 
-            // Insert into table
-            Object[] rowData = {currentOrderId++, customerId, customerName, productId, price, quantity, total};
-            tableModel.addRow(rowData);
-            orderList.add(rowData);
 
-            clearFields();
-        } catch (Exception ex) {
-            ex.printStackTrace();
+            //Thêm thông tin vào Order_customer
+            String insertOrder = "INSERT INTO Order_Customer (id_order, id_customer) VALUES (?, ?)";
+            try (PreparedStatement stmt = conn.prepareStatement(insertOrder)) {
+                stmt.setString(1, orderId);
+                stmt.setString(2, customerId);
+                stmt.executeUpdate();
+
+            } catch (SQLException e) {
+                conn.rollback();
+                e.printStackTrace();
+                JOptionPane.showMessageDialog(this, "Error while inserting order.");
+            }
+
+            // Kiểm tra sản phẩm tồn tại và số lượng đủ không và thêm sản phẩm vào order_product,cập nhập
+            // các thông tin liên quan
+            String checkProduct = "SELECT quantity, price FROM Product WHERE id = ?";
+            try (PreparedStatement checkProductStmt = conn.prepareStatement(checkProduct)) {
+                checkProductStmt.setString(1, productId);
+                try (ResultSet rs = checkProductStmt.executeQuery()) {
+                    if (rs.next()) {
+                        int availableQuantity = rs.getInt("quantity");
+                        double productPrice = rs.getDouble("price");
+
+                        if (availableQuantity < quantity) {
+                            JOptionPane.showMessageDialog(this, "Not enough product in stock.");
+                            return;
+                        }
+
+                        // Thêm sản phẩm vào Order_Product
+                        String insertOrderProduct = "INSERT INTO Order_Product (order_id, product_id, quantity) VALUES (?, ?, ?)";
+                        try (PreparedStatement insertOrderProductStmt = conn.prepareStatement(insertOrderProduct)) {
+                            insertOrderProductStmt.setString(1, orderId);
+                            insertOrderProductStmt.setString(2, productId);
+                            insertOrderProductStmt.setInt(3, quantity);
+                            insertOrderProductStmt.executeUpdate();
+                        }
+
+                        // Trừ số lượng trong kho
+                        String updateProductQuantity = "UPDATE Product SET quantity = quantity - ? WHERE id = ?";
+                        try (PreparedStatement updateProductStmt = conn.prepareStatement(updateProductQuantity)) {
+                            updateProductStmt.setInt(1, quantity);
+                            updateProductStmt.setString(2, productId);
+                            updateProductStmt.executeUpdate();
+                        }
+
+                        // Cập nhật tổng giá trị đơn hàng
+                        String updateOrderPrice= "UPDATE `Order` SET totalPrice = totalPrice + ? WHERE id = ?";
+                        try (PreparedStatement updateOrderPriceStmt = conn.prepareStatement(updateOrderPrice)) {
+                            updateOrderPriceStmt.setDouble(1, productPrice*quantity);
+                            updateOrderPriceStmt.setString(2, orderId);
+                            updateOrderPriceStmt.executeUpdate();
+                        }
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Product ID not found.");
+                        return;
+                    }
+                }
+            }
+            conn.commit();
+            JOptionPane.showMessageDialog(this, "Order updated successfully!");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            try {
+
+            } catch (Exception rollbackEx) {
+                rollbackEx.printStackTrace();
+            }
         }
     }
 
     private void deleteOrder() {
-        int selectedRow = orderTable.getSelectedRow();
-        if (selectedRow != -1) {
-            orderList.remove(selectedRow);
-            tableModel.removeRow(selectedRow);
-        } else {
-            JOptionPane.showMessageDialog(this, "Please select a row to delete");
+        String orderId = txtOrderId.getText().trim();
+        if (orderId.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Order ID cannot be empty.");
+            return;
+        }
+        try (Connection conn = DriverManager.getConnection(URL, User, Password)) {
+            String deleteOrder = "UPDATE `Order` SET status = '0' WHERE id = ?";
+            try (PreparedStatement stmt = conn.prepareStatement(deleteOrder)) {
+                stmt.setString(1, orderId);
+                int rowsAffected = stmt.executeUpdate();
+                if (rowsAffected > 0) {
+                    JOptionPane.showMessageDialog(this, "Order has been successfully deleted.");
+                } else {
+                    JOptionPane.showMessageDialog(this, "Order ID not found.");
+                }
+            }
+        } catch (SQLException ex) {
+            JOptionPane.showMessageDialog(this, "Database error: " + ex.getMessage());
         }
     }
+
 
     private void updateOrder() {
         int selectedRow = orderTable.getSelectedRow();
@@ -164,13 +265,9 @@ public class OrderDataBase extends JPanel {
         String orderId = txtOrderId.getText().trim();
         int quantity = Integer.parseInt(txtQuantity.getText().trim());
 
-
         if (selectedRow != -1) {
             try (Connection conn = DriverManager.getConnection(URL, User, Password)) {
-                // Bắt đầu giao dịch
                 conn.setAutoCommit(false);
-
-
                 Double price = productMap.get(productId);
 
                 if (price == null) {
@@ -195,8 +292,8 @@ public class OrderDataBase extends JPanel {
                 int quantity_input = Integer.parseInt(txtQuantity.getText().trim());
                 String sqlUpdateOrder = "UPDATE `Order` SET totalprice = ? WHERE id = ?";
                 try (PreparedStatement statementOrder = conn.prepareStatement(sqlUpdateOrder)) {
-                    statementOrder.setDouble(1, total);  // Set total price
-                    statementOrder.setString(2, orderId);  // Set the order id for update
+                    statementOrder.setDouble(1, total);
+                    statementOrder.setString(2, orderId);
 
                     int rowsUpdatedOrder = statementOrder.executeUpdate();
                     if (rowsUpdatedOrder <= 0) {
@@ -218,13 +315,11 @@ public class OrderDataBase extends JPanel {
                     }
 
 
-
                 // Cập nhật quantity trong bảng Product_Order
-
                 String sqlUpdateProduct_Order = "UPDATE Order_Product SET quantity = ? WHERE order_id= ?";
                 try (PreparedStatement statementProduct = conn.prepareStatement(sqlUpdateProduct_Order)) {
-                    statementProduct.setInt(1, quantity_input);  // Subtract purchased quantity from product stock
-                    statementProduct.setString(2, orderId);  // Use the product id for update
+                    statementProduct.setInt(1, quantity_input);
+                    statementProduct.setString(2, orderId);
 
                     int rowsUpdatedProduct = statementProduct.executeUpdate();
                     if (rowsUpdatedProduct <= 0) {
@@ -271,49 +366,56 @@ public class OrderDataBase extends JPanel {
     private void loadData() {
         tableModel.setRowCount(0);
         orderList.clear();
-        try (Connection conn = DriverManager.getConnection(URL, User, Password)) {
-            String sql= """
-         SELECT
-                 o.id AS order_id,
-                 c.id AS customer_id,
-                 c.name AS customer_name,
-                 p.id AS product_id,
-                 p.price,
-                 op.quantity,
-                 (p.price * op.quantity) AS total
-             FROM
-                 `Order` o
-             JOIN
-                 Order_Customer oc ON o.id = oc.id_order
-             JOIN
-                 Customer c ON oc.id_customer = c.id
-             JOIN
-                 Order_Product op ON o.id = op.order_id
-             JOIN
-                 Product p ON op.product_id = p.id
-        """;
-            Statement stmt = conn.createStatement();
-            ResultSet rs = stmt.executeQuery(sql);
+
+        String sql = """
+        SELECT
+            o.id AS order_id,
+            o.status,
+            c.id AS customer_id,
+            c.name AS customer_name,
+            p.id AS product_id,
+            p.price,
+            op.quantity,
+            (p.price * op.quantity) AS total
+        FROM
+            `Order` o
+        JOIN
+            Order_Customer oc ON o.id = oc.id_order
+        JOIN
+            Customer c ON oc.id_customer = c.id
+        JOIN
+            Order_Product op ON o.id = op.order_id
+        JOIN
+            Product p ON op.product_id = p.id
+    """;
+
+        try (Connection conn = DriverManager.getConnection(URL, User, Password);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
 
             while (rs.next()) {
+                String status = rs.getString("status");
+                if ("1".equalsIgnoreCase(status)) {// Chỉ lấy Order trạng thái là 1
+                    // Thêm dữ liệu vào bảng và danh sách
+                    Object[] rowData = {
+                            rs.getString("order_id"),
+                            rs.getString("customer_id"),
+                            rs.getString("customer_name"),
+                            rs.getInt("product_id"),
+                            rs.getDouble("price"),
+                            rs.getInt("quantity"),
+                            rs.getDouble("total"),
+                            status
+                    };
+                    tableModel.addRow(rowData);
+                    orderList.add(rowData);
+                }
 
-                Object[] rowData = {
-                        rs.getString("order_id"),
-                        rs.getString("customer_id"),
-                        rs.getString("customer_name"),
-                        rs.getInt("product_id"),
-                        rs.getDouble("price"),
-                        rs.getInt("quantity"),
-                        rs.getDouble("total")
-                };
 
-                tableModel.addRow(rowData);
-                orderList.add(rowData); // Assuming orderList is a list to store order data
             }
-        } catch (Exception ex) {
+        } catch (SQLException ex) {
             System.out.println("Database error: " + ex.getMessage());
         }
-
     }
 
     private void clearFields() {
